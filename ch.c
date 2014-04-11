@@ -43,7 +43,7 @@ struct bufnode {
 	struct bufnode *hnext, *hprev;
 };
 
-#define	LBUFSIZE	8192
+#define	LBUFSIZE	(32 * 1024)
 struct buf {
 	struct bufnode node;
 	BLOCKNUM block;
