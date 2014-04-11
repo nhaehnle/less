@@ -17,6 +17,8 @@
 #include "less.h"
 #include "charset.h"
 
+#include <string.h>
+
 static char *linebuf = NULL;	/* Buffer which holds the current output line */
 static char *attr = NULL;	/* Extension of linebuf to hold attributes */
 public int size_linebuf = 0;	/* Size of line buffer (and attr buffer) */
@@ -1130,48 +1132,92 @@ null_line()
  * {{ This is supposed to be more efficient than forw_line(). }}
  */
 	public POSITION
-forw_raw_line(curr_pos, linep, line_lenp)
-	POSITION curr_pos;
-	char **linep;
-	int *line_lenp;
+forw_raw_line(
+	POSITION curr_pos,
+	char **linep,
+	int *line_lenp)
 {
-	register int n;
-	register int c;
-	POSITION new_pos;
+	int n;
 
-	if (curr_pos == NULL_POSITION || ch_seek(curr_pos) ||
-		(c = ch_forw_get()) == EOI)
+	if (curr_pos == NULL_POSITION)
 		return (NULL_POSITION);
 
 	n = 0;
 	for (;;)
 	{
-		if (c == '\n' || c == EOI || ABORT_SIGS())
+		const char * buf;
+		int bufsize;
+
+		if (ch_seek(curr_pos))
+			return NULL_POSITION;
+
+		bufsize = ch_peek_forward(&buf);
+		if (bufsize < 0)
 		{
-			new_pos = ch_tell();
-			break;
+			/*
+			 * Data has been lost. However, since we don't know how much
+			 * data has been lost, we still proceed, albeit slowly.
+			 *
+			 * This could be done more efficiently, but it is an uncommon
+			 * case that can only be triggered when the user explicitly
+			 * disables buffering while reading from a pipe.
+			 */
+			static const char lostdata[1] = { '?' };
+			buf = lostdata;
+			bufsize = 1;
 		}
-		if (n >= size_linebuf-1)
+
+		if (bufsize == 0)
 		{
-			if (expand_linebuf())
+			/* EOI has been reached */
+			if (n == 0)
+				return NULL_POSITION;
+
+			break;
+		} else if (bufsize > 0)
+		{
+			/*
+			 * Ensure that there is one additional byte of space for
+			 * the terminating NUL byte.
+			 */
+			while (bufsize >= size_linebuf - n)
 			{
-				/*
-				 * Overflowed the input buffer.
-				 * Pretend the line ended here.
-				 */
-				new_pos = ch_tell() - 1;
+				if (expand_linebuf())
+				{
+					/*
+					 * Overflowed the input buffer.
+					 * Pretend the line ended here.
+					 */
+					goto out;
+				}
+			}
+
+			const char * newline = memchr(buf, '\n', bufsize);
+			int bytes;
+
+			if (newline)
+				bytes = newline - buf;
+			else
+				bytes = bufsize;
+
+			memcpy(linebuf + n, buf, bytes);
+			n += bytes;
+			curr_pos += bytes;
+
+			if (newline) {
+				++curr_pos;
 				break;
 			}
 		}
-		linebuf[n++] = c;
-		c = ch_forw_get();
 	}
+out:;
+
 	linebuf[n] = '\0';
 	if (linep != NULL)
 		*linep = linebuf;
 	if (line_lenp != NULL)
 		*line_lenp = n;
-	return (new_pos);
+	return curr_pos;
 }
 
 /*

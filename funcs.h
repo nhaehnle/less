@@ -43,6 +43,7 @@
 	public POSITION ch_tell ();
 	public int ch_forw_get ();
 	public int ch_back_get ();
+	public int ch_peek_forward(const char ** buf);
 	public void ch_setbufspace ();
 	public void ch_flush ();
 	public int seekable ();

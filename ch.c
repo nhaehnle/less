@@ -644,6 +644,27 @@ ch_forw_get()
 }
 
 /*
+ * Set *bufp to point towards a buffer that begins with the current char.
+ * Returns the number of bytes available in the buffer. In particular, 0
+ * is returned at EOI. Returns -1 if data has been lost.
+ */
+	public int
+ch_peek_forward(const char ** bufp)
+{
+	struct buf * bp;
+	int ret;
+
+	ret = ch_get_buf(&bp);
+	if (ret == GET_BUF_EOI)
+		return 0;
+	if (ret == GET_BUF_LOST_DATA)
+		return -1;
+
+	*bufp = bp->data + ch_offset;
+	return bp->datasize - ch_offset;
+}
+
+/*
  * Pre-decrement the read pointer and get the new current char.
  */
 	public int
