@@ -20,6 +20,8 @@
 #include <windows.h>
 #endif
 
+#include <assert.h>
+
 #if HAVE_STAT_INO
 #include <sys/stat.h>
 extern dev_t curr_dev;
@@ -139,23 +141,34 @@ extern char *namelogfile;
 
 static int ch_addbuf();
 
+enum {
+	/* ch_get_buf returned successfully */
+	GET_BUF_OK,
+
+	/* ch_get_buf did not return a buffer because EOI was reached */
+	GET_BUF_EOI,
+
+	/* ch_get_buf did not return a buffer because input data was irretrievably lost */
+	GET_BUF_LOST_DATA
+};
 
 /*
- * Get the character pointed to by the read pointer.
+ * Ensure that the character pointed to by the read pointer is read
+ * into memory and store a pointer to that buffer in bpp.
  */
-	int
-ch_get()
+	static int
+ch_get_buf(struct buf ** bpp)
 {
-	register struct buf *bp;
-	register struct bufnode *bn;
-	register int n;
-	register int slept;
-	register int h;
+	struct buf *bp;
+	struct bufnode *bn;
+	int n;
+	int slept;
+	int h;
 	POSITION pos;
 	POSITION len;
 
 	if (thisfile == NULL)
-		return (EOI);
+		return GET_BUF_EOI;
 
 	/*
 	 * Quick check for the common case where 
@@ -164,8 +177,10 @@ ch_get()
 	if (ch_bufhead != END_OF_CHAIN)
 	{
 		bp = bufnode_buf(ch_bufhead);
-		if (ch_block == bp->block && ch_offset < bp->datasize)
-			return bp->data[ch_offset];
+		if (ch_block == bp->block && ch_offset < bp->datasize) {
+			*bpp = bp;
+			return GET_BUF_OK;
+		}
 	}
 
 	slept = FALSE;
@@ -221,22 +236,22 @@ ch_get()
 			/*
 			 * At end of file.
 			 */
-			return (EOI);
+			return GET_BUF_EOI;
 
 		if (pos != ch_fpos)
 		{
 			/*
 			 * Not at the correct position: must seek.
 			 * If input is a pipe, we're in trouble (can't seek on a pipe).
-			 * Some data has been lost: just return "?".
+			 * Some data has been lost.
 			 */
 			if (!(ch_flags & CH_CANSEEK))
-				return ('?');
+				return GET_BUF_LOST_DATA;
 			if (lseek(ch_file, (off_t)pos, SEEK_SET) == BAD_LSEEK)
 			{
 				error("seek error", NULL_PARG);
 				clear_eol();
-				return (EOI);
+				return GET_BUF_EOI;
 			}
 			ch_fpos = pos;
 		}
@@ -262,7 +277,7 @@ ch_get()
 		}
 
 		if (n == READ_INTR)
-			return (EOI);
+			return GET_BUF_EOI;
 		if (n < 0)
 		{
 #if MSDOS_COMPILER==WIN32C
@@ -328,13 +343,13 @@ ch_get()
 						/* screen_trashed=2 causes
 						 * make_display to reopen the file. */
 						screen_trashed = 2;
-						return (EOI);
+						return GET_BUF_EOI;
 					}
 				}
 #endif
 			}
 			if (sigs)
-				return (EOI);
+				return GET_BUF_EOI;
 		}
 	}
 
@@ -354,7 +369,28 @@ ch_get()
 		BUF_HASH_INS(bn, h);
 	}
 
-	return (bp->data[ch_offset]);
+	*bpp = bp;
+	return GET_BUF_OK;
+}
+
+
+/*
+ * Get the character pointed to by the read pointer.
+ */
+	int
+ch_get()
+{
+	struct buf * bp;
+	int ret;
+
+	ret = ch_get_buf(&bp);
+	if (ret == GET_BUF_EOI)
+		return EOI;
+	else if (ret == GET_BUF_LOST_DATA)
+		return '?';
+
+	assert(ret == GET_BUF_OK);
+	return bp->data[ch_offset];
 }
 
 /*
