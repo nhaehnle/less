@@ -178,14 +178,7 @@ ch_get()
 	{
 		bp = bufnode_buf(bn);
 		if (bp->block == ch_block)
-		{
-			if (ch_offset >= bp->datasize)
-				/*
-				 * Need more data in this buffer.
-				 */
-				break;
-			goto found;
-		}
+			break;
 	}
 	if (bn == END_OF_HCHAIN(h))
 	{
@@ -221,129 +214,130 @@ ch_get()
 		BUF_HASH_INS(bn, h); /* Insert into new hash chain. */
 	}
 
-    read_more:
-	pos = (ch_block * LBUFSIZE) + bp->datasize;
-	if ((len = ch_length()) != NULL_POSITION && pos >= len)
-		/*
-		 * At end of file.
-		 */
-		return (EOI);
-
-	if (pos != ch_fpos)
+	while (ch_offset >= bp->datasize)
 	{
-		/*
-		 * Not at the correct position: must seek.
-		 * If input is a pipe, we're in trouble (can't seek on a pipe).
-		 * Some data has been lost: just return "?".
-		 */
-		if (!(ch_flags & CH_CANSEEK))
-			return ('?');
-		if (lseek(ch_file, (off_t)pos, SEEK_SET) == BAD_LSEEK)
-		{
- 			error("seek error", NULL_PARG);
-			clear_eol();
+		pos = (ch_block * LBUFSIZE) + bp->datasize;
+		if ((len = ch_length()) != NULL_POSITION && pos >= len)
+			/*
+			 * At end of file.
+			 */
 			return (EOI);
- 		}
- 		ch_fpos = pos;
- 	}
 
-	/*
-	 * Read the block.
-	 * If we read less than a full block, that's ok.
-	 * We use partial block and pick up the rest next time.
-	 */
-	if (ch_ungotchar != -1)
-	{
-		bp->data[bp->datasize] = ch_ungotchar;
-		n = 1;
-		ch_ungotchar = -1;
-	} else if (ch_flags & CH_HELPFILE)
-	{
-		bp->data[bp->datasize] = helpdata[ch_fpos];
-		n = 1;
-	} else
-	{
-		n = iread(ch_file, &bp->data[bp->datasize], 
-			(unsigned int)(LBUFSIZE - bp->datasize));
-	}
-
-	if (n == READ_INTR)
-		return (EOI);
-	if (n < 0)
-	{
-#if MSDOS_COMPILER==WIN32C
-		if (errno != EPIPE)
-#endif
-		{
-			error("read error", NULL_PARG);
-			clear_eol();
-		}
-		n = 0;
-	}
-
-#if LOGFILE
-	/*
-	 * If we have a log file, write the new data to it.
-	 */
-	if (!secure && logfile >= 0 && n > 0)
-		write(logfile, (char *) &bp->data[bp->datasize], n);
-#endif
-
-	ch_fpos += n;
-	bp->datasize += n;
-
-	/*
-	 * If we have read to end of file, set ch_fsize to indicate
-	 * the position of the end of file.
-	 */
-	if (n == 0)
-	{
-		ch_fsize = pos;
-		if (ignore_eoi)
+		if (pos != ch_fpos)
 		{
 			/*
-			 * We are ignoring EOF.
-			 * Wait a while, then try again.
+			 * Not at the correct position: must seek.
+			 * If input is a pipe, we're in trouble (can't seek on a pipe).
+			 * Some data has been lost: just return "?".
 			 */
-			if (!slept)
+			if (!(ch_flags & CH_CANSEEK))
+				return ('?');
+			if (lseek(ch_file, (off_t)pos, SEEK_SET) == BAD_LSEEK)
 			{
-				PARG parg;
-				parg.p_string = wait_message();
-				ierror("%s", &parg);
+				error("seek error", NULL_PARG);
+				clear_eol();
+				return (EOI);
 			}
+			ch_fpos = pos;
+		}
+
+		/*
+		 * Read the block.
+		 * If we read less than a full block, that's ok.
+		 * We use partial block and pick up the rest next time.
+		 */
+		if (ch_ungotchar != -1)
+		{
+			bp->data[bp->datasize] = ch_ungotchar;
+			n = 1;
+			ch_ungotchar = -1;
+		} else if (ch_flags & CH_HELPFILE)
+		{
+			bp->data[bp->datasize] = helpdata[ch_fpos];
+			n = 1;
+		} else
+		{
+			n = iread(ch_file, &bp->data[bp->datasize],
+				(unsigned int)(LBUFSIZE - bp->datasize));
+		}
+
+		if (n == READ_INTR)
+			return (EOI);
+		if (n < 0)
+		{
+#if MSDOS_COMPILER==WIN32C
+			if (errno != EPIPE)
+#endif
+			{
+				error("read error", NULL_PARG);
+				clear_eol();
+			}
+			n = 0;
+		}
+
+#if LOGFILE
+		/*
+		 * If we have a log file, write the new data to it.
+		 */
+		if (!secure && logfile >= 0 && n > 0)
+			write(logfile, (char *) &bp->data[bp->datasize], n);
+#endif
+
+		ch_fpos += n;
+		bp->datasize += n;
+
+		/*
+		 * If we have read to end of file, set ch_fsize to indicate
+		 * the position of the end of file.
+		 */
+		if (n == 0)
+		{
+			ch_fsize = pos;
+			if (ignore_eoi)
+			{
+				/*
+				 * We are ignoring EOF.
+				 * Wait a while, then try again.
+				 */
+				if (!slept)
+				{
+					PARG parg;
+					parg.p_string = wait_message();
+					ierror("%s", &parg);
+				}
 #if !MSDOS_COMPILER
-	 		sleep(1);
+				sleep(1);
 #else
 #if MSDOS_COMPILER==WIN32C
-			Sleep(1000);
+				Sleep(1000);
 #endif
 #endif
-			slept = TRUE;
+				slept = TRUE;
 
 #if HAVE_STAT_INO
-			if (follow_mode == FOLLOW_NAME)
-			{
-				/* See whether the file's i-number has changed.
-				 * If so, force the file to be closed and
-				 * reopened. */
-				struct stat st;
-				int r = stat(get_filename(curr_ifile), &st);
-				if (r == 0 && (st.st_ino != curr_ino ||
-					st.st_dev != curr_dev))
+				if (follow_mode == FOLLOW_NAME)
 				{
-					/* screen_trashed=2 causes
-					 * make_display to reopen the file. */
-					screen_trashed = 2;
-					return (EOI);
+					/* See whether the file's i-number has changed.
+					 * If so, force the file to be closed and
+					 * reopened. */
+					struct stat st;
+					int r = stat(get_filename(curr_ifile), &st);
+					if (r == 0 && (st.st_ino != curr_ino ||
+						st.st_dev != curr_dev))
+					{
+						/* screen_trashed=2 causes
+						 * make_display to reopen the file. */
+						screen_trashed = 2;
+						return (EOI);
+					}
 				}
-			}
 #endif
+			}
+			if (sigs)
+				return (EOI);
 		}
-		if (sigs)
-			return (EOI);
 	}
 
-    found:
 	if (ch_bufhead != bn)
 	{
 		/*
@@ -359,13 +353,6 @@ ch_get()
 		BUF_HASH_RM(bn);
 		BUF_HASH_INS(bn, h);
 	}
-
-	if (ch_offset >= bp->datasize)
-		/*
-		 * After all that, we still don't have enough data.
-		 * Go back and try again.
-		 */
-		goto read_more;
 
 	return (bp->data[ch_offset]);
 }
