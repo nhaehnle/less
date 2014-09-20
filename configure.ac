@@ -277,6 +277,14 @@ AC_TRY_LINK([
 #endif], [strstr("x","x");],
   [AC_MSG_RESULT(yes); AC_DEFINE(HAVE_STRSTR)], [AC_MSG_RESULT(no)])
 
+AC_MSG_CHECKING(for strcasestr)
+AC_TRY_LINK([
+#define _GNU_SOURCE 1
+#if HAVE_STRING_H
+#include <string.h>
+#endif], [strcasestr("x","x");],
+  [AC_MSG_RESULT(yes); AC_DEFINE(HAVE_STRCASESTR)], [AC_MSG_RESULT(no)])
+
 # Some systems have termios.h but not the corresponding functions.
 AC_CHECK_FUNC(tcgetattr, AC_DEFINE(HAVE_TERMIOS_FUNCS))
 
@@ -665,6 +673,9 @@ AH_TOP([
 
 /* Define to 1 if you have the strstr() function. */
 #define HAVE_STRSTR 1
+
+/* Define to 1 if you have the strcasestr() function. */
+#define HAVE_STRCASESTR 1
 
 /*
  * Sizes of various buffers.

@@ -11,6 +11,7 @@
  * Routines to do pattern matching.
  */
 
+#define _GNU_SOURCE 1
 #include "less.h"
 #include "pattern.h"
 
@@ -214,32 +215,31 @@ is_null_pattern(pattern)
  * It supports no metacharacters like *, etc.
  */
 	static int
-match(pattern, pattern_len, buf, buf_len, pfound, pend)
+match(pattern, buf, buf_len, pfound, pend, iscaseless)
 	char *pattern;
-	int pattern_len;
 	char *buf;
 	int buf_len;
 	char **pfound, **pend;
+	int iscaseless;
 {
-	register char *pp, *lp;
-	register char *pattern_end = pattern + pattern_len;
-	register char *buf_end = buf + buf_len;
+	char *p;
 
-	for ( ;  buf < buf_end;  buf++)
-	{
-		for (pp = pattern, lp = buf;  *pp == *lp;  pp++, lp++)
-			if (pp == pattern_end || lp == buf_end)
-				break;
-		if (pp == pattern_end)
-		{
-			if (pfound != NULL)
-				*pfound = buf;
-			if (pend != NULL)
-				*pend = lp;
-			return (1);
-		}
+
+#ifdef HAVE_STRCASECMP
+	/* Otherwise it's always lower case from earlier conversion */
+	if (iscaseless)
+		p = strcasestr(buf, pattern);
+	else
+#endif
+		p = strstr(buf, pattern);
+	if (p) {
+		if (pfound)
+			*pfound = p;
+		if (pend)
+			*pend = p + strlen(pattern);
+		return 1;
 	}
-	return (0);
+	return 0;
 }
 
 /*
@@ -247,7 +247,7 @@ match(pattern, pattern_len, buf, buf_len, pfound, pend)
  * Set sp and ep to the start and end of the matched string.
  */
 	public int
-match_pattern(pattern, tpattern, line, line_len, sp, ep, notbol, search_type)
+match_pattern(pattern, tpattern, line, line_len, sp, ep, notbol, search_type, iscaseless)
 	void *pattern;
 	char *tpattern;
 	char *line;
@@ -256,6 +256,7 @@ match_pattern(pattern, tpattern, line, line_len, sp, ep, notbol, search_type)
 	char **ep;
 	int notbol;
 	int search_type;
+	int iscaseless;
 {
 	int matched;
 #if HAVE_GNU_REGEX
@@ -281,7 +282,7 @@ match_pattern(pattern, tpattern, line, line_len, sp, ep, notbol, search_type)
 	search_type |= SRCH_NO_REGEX;
 #endif
 	if (search_type & SRCH_NO_REGEX)
-		matched = match(tpattern, strlen(tpattern), line, line_len, sp, ep);
+		matched = match(tpattern, line, line_len, sp, ep, iscaseless);
 	else
 	{
 #if HAVE_GNU_REGEX
@@ -290,6 +291,9 @@ match_pattern(pattern, tpattern, line, line_len, sp, ep, notbol, search_type)
 		regoff_t *starts = (regoff_t *) ecalloc(1, sizeof (regoff_t));
 		regoff_t *ends = (regoff_t *) ecalloc(1, sizeof (regoff_t));
 		spattern->not_bol = notbol;
+		if (iscaseless)
+			re_set_syntax(RE_ICASE);
+		re_set_syntax(
 		re_set_registers(spattern, &search_regs, 1, starts, ends);
 		matched = re_search(spattern, line, line_len, 0, line_len, &search_regs) >= 0;
 		if (matched)
@@ -305,6 +309,8 @@ match_pattern(pattern, tpattern, line, line_len, sp, ep, notbol, search_type)
 	{
 		regmatch_t rm;
 		int flags = (notbol) ? REG_NOTBOL : 0;
+		if (iscaseless)
+			flags |= REG_ICASE;
 		matched = !regexec(spattern, line, 1, &rm, flags);
 		if (matched)
 		{
@@ -321,6 +327,8 @@ match_pattern(pattern, tpattern, line, line_len, sp, ep, notbol, search_type)
 #if HAVE_PCRE
 	{
 		int flags = (notbol) ? PCRE_NOTBOL : 0;
+		if (iscaseless)
+			flags |= PCRE_CASELESS;
 		int ovector[3];
 		matched = pcre_exec(spattern, NULL, line, line_len,
 			0, flags, ovector, 3) >= 0;
