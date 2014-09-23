@@ -572,7 +572,7 @@ hilite_line(linepos, line, line_len, chpos, sp, ep, cvt_ops)
 		else /* end of line */
 			break;
 	} while (match_pattern(info_compiled(&search_info), search_info.text,
-			searchp, line_end - searchp, &sp, &ep, 1, search_info.search_type));
+			searchp, line_end - searchp, &sp, &ep, 1, search_info.search_type, is_caseless));
 }
 #endif
 
@@ -727,6 +727,12 @@ search_pos(search_type)
 	return (pos);
 }
 
+#ifdef HAVE_STRCASESTR
+#define NO_STRCASESTR 0
+#else
+#define NO_STRCASESTR 1
+#endif
+
 /*
  * Search a subset of the file, specified by start/end position.
  */
@@ -753,6 +759,7 @@ search_range(pos, endpos, search_type, matches, maxlines, plinepos, pendpos)
 
 	linenum = find_linenum(pos);
 	oldpos = pos;
+	cvt_ops = get_cvt_ops();
 	for (;;)
 	{
 		/*
@@ -827,15 +834,21 @@ search_range(pos, endpos, search_type, matches, maxlines, plinepos, pendpos)
 		if (is_filtered(linepos))
 			continue;
 
+		cline = NULL;
+		chpos = NULL;
+
 		/*
-		 * If it's a caseless search, convert the line to lowercase.
-		 * If we're doing backspace processing, delete backspaces.
+		 * Only for backspace conversion do we need to convert before
+		 * search. Otherwise only do it when something is found.
 		 */
-		cvt_ops = get_cvt_ops();
-		cvt_len = cvt_length(line_len, cvt_ops);
-		cline = (char *) ecalloc(1, cvt_len);
-		chpos = cvt_alloc_chpos(cvt_len);
-		cvt_text(cline, line, chpos, &line_len, cvt_ops);
+		if (((cvt_ops & CVT_BS) && strchr(line, '\b')) || NO_STRCASESTR)
+		{
+			cvt_len = cvt_length(line_len, cvt_ops);
+			cline = (char *) ecalloc(1, cvt_len);
+			chpos = cvt_alloc_chpos(cvt_len);
+			cvt_text(cline, line, chpos, &line_len, cvt_ops);
+		}
+
 
 #if HILITE_SEARCH
 		/*
@@ -844,7 +857,7 @@ search_range(pos, endpos, search_type, matches, maxlines, plinepos, pendpos)
 		 */
 		if ((search_type & SRCH_FIND_ALL) && prev_pattern(&filter_info)) {
 			int line_filter = match_pattern(info_compiled(&filter_info), filter_info.text,
-				cline, line_len, &sp, &ep, 0, filter_info.search_type);
+				line, line_len, &sp, &ep, 0, filter_info.search_type, is_caseless);
 			if (line_filter)
 			{
 				struct hilite *hl = (struct hilite *)
@@ -864,9 +877,20 @@ search_range(pos, endpos, search_type, matches, maxlines, plinepos, pendpos)
 		if (prev_pattern(&search_info))
 		{
 			line_match = match_pattern(info_compiled(&search_info), search_info.text,
-				cline, line_len, &sp, &ep, 0, search_type);
+				line, line_len, &sp, &ep, 0, search_type, is_caseless);
 			if (line_match)
 			{
+				if (!cline)
+				{
+					cvt_len = cvt_length(line_len, cvt_ops);
+					cline = (char *) ecalloc(1, cvt_len);
+					chpos = cvt_alloc_chpos(cvt_len);
+					cvt_text(cline, line, chpos, &line_len, cvt_ops);
+				}
+				/* Search again in converted line */
+				match_pattern(info_compiled(&search_info), search_info.text,
+					cline, line_len, &sp, &ep, 0, search_type, is_caseless);
+
 				/*
 				 * Got a match.
 				 */
